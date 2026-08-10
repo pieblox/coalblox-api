@@ -5,7 +5,7 @@ const cors = require("cors");
 const app = express();
 
 const corsOptions = {
-    origin: "https://coalblox.github.io",
+    origin: "https://pieblox.github.io",
     credentials: true
 };
 
@@ -60,7 +60,7 @@ app.post("/login/v1", async (req, res) => {
 
         return res.json({
             success: true,
-            redirect: "https://coalblox.github.io/games"
+            redirect: "https://pieblox.github.io/games"
         });
 
     } catch (err) {
@@ -197,7 +197,7 @@ app.get("/routes", (req, res) => {
 app.get("/", (req, res) => {
     res.json({
         success: true,
-        message: "coalblox API is running",
+        message: "Pieblox API is running",
         version: "1.0",
         time: new Date()
     });
