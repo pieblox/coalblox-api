@@ -1,4 +1,3 @@
-```javascript
 const pool = require("./db");
 const express = require("express");
 const cors = require("cors");
@@ -7,10 +6,7 @@ const crypto = require("crypto");
 const app = express();
 
 const corsOptions = {
-    origin: [
-        "https://pieblox.github.io",
-        "https://coalblox.github.io"
-    ],
+    origin: "https://pieblox.github.io",
     credentials: true
 };
 
@@ -20,15 +16,12 @@ app.options("*", cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// =========================
-// PASSWORD HASHING
-// =========================
-
+// Password hashing
 function hashPassword(password) {
-    return new Promise(function (resolve, reject) {
+    return new Promise((resolve, reject) => {
         const salt = crypto.randomBytes(16).toString("hex");
 
-        crypto.scrypt(password, salt, 64, function (err, derivedKey) {
+        crypto.scrypt(password, salt, 64, (err, derivedKey) => {
             if (err) {
                 reject(err);
                 return;
@@ -41,25 +34,18 @@ function hashPassword(password) {
     });
 }
 
-function verifyPassword(password, storedHash) {
-    return new Promise(function (resolve, reject) {
-        if (!storedHash || !storedHash.includes(":")) {
+function verifyPassword(password, storedPassword) {
+    return new Promise((resolve, reject) => {
+        if (!storedPassword || !storedPassword.includes(":")) {
             resolve(false);
             return;
         }
 
-        const parts = storedHash.split(":");
+        const parts = storedPassword.split(":");
         const salt = parts[0];
-        const key = parts[1];
+        const storedKey = Buffer.from(parts[1], "hex");
 
-        if (!salt || !key) {
-            resolve(false);
-            return;
-        }
-
-        const storedKey = Buffer.from(key, "hex");
-
-        crypto.scrypt(password, salt, 64, function (err, derivedKey) {
+        crypto.scrypt(password, salt, 64, (err, derivedKey) => {
             if (err) {
                 reject(err);
                 return;
@@ -80,10 +66,6 @@ function verifyPassword(password, storedHash) {
     });
 }
 
-// =========================
-// SESSION HELPERS
-// =========================
-
 function createSessionToken() {
     return crypto.randomBytes(32).toString("hex");
 }
@@ -96,25 +78,24 @@ function hashSessionToken(token) {
 }
 
 function getSessionToken(req) {
-    const cookieHeader = req.headers.cookie;
+    const cookies = req.headers.cookie;
 
-    if (!cookieHeader) {
+    if (!cookies) {
         return null;
     }
 
-    const cookies = cookieHeader.split(";");
+    const sessionCookie = cookies
+        .split(";")
+        .map(cookie => cookie.trim())
+        .find(cookie => cookie.startsWith("session="));
 
-    for (let i = 0; i < cookies.length; i++) {
-        const cookie = cookies[i].trim();
-
-        if (cookie.startsWith("session=")) {
-            return decodeURIComponent(
-                cookie.substring("session=".length)
-            );
-        }
+    if (!sessionCookie) {
+        return null;
     }
 
-    return null;
+    return decodeURIComponent(
+        sessionCookie.substring("session=".length)
+    );
 }
 
 async function createSession(userId) {
@@ -142,45 +123,20 @@ async function findUser(username) {
     return result.rows[0];
 }
 
-async function getUserFromSession(token) {
-    if (!token) {
-        return null;
-    }
-
-    const tokenHash = hashSessionToken(token);
-
-    const result = await pool.query(
-        "SELECT users.id, users.username FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token_hash = $1 AND sessions.expires_at > NOW()",
-        [tokenHash]
-    );
-
-    return result.rows[0] || null;
-}
-
-// =========================
-// LOGIN PAGE TEST
-// =========================
-
-app.get("/login/v1", function (req, res) {
+// Login page test
+app.get("/login/v1", (req, res) => {
     res.json({
         success: true,
         message: "Login endpoint exists. Use POST."
     });
 });
 
-// =========================
-// LOGIN
-// =========================
+// Login
+app.post("/login/v1", async (req, res) => {
+    const { username, password } = req.body || {};
 
-app.post("/login/v1", async function (req, res) {
-    const username = req.body && req.body.username;
-    const password = req.body && req.body.password;
-
-    // NEVER log the password.
-    console.log(
-        "Login attempt:",
-        username || "(missing username)"
-    );
+    // Do NOT log the password.
+    console.log("LOGIN:", username);
 
     try {
         if (!username || !password) {
@@ -199,10 +155,28 @@ app.post("/login/v1", async function (req, res) {
             });
         }
 
-        const validPassword = await verifyPassword(
-            password,
-            user.password
-        );
+        let validPassword = false;
+
+        // New hashed passwords
+        if (user.password && user.password.includes(":")) {
+            validPassword = await verifyPassword(
+                password,
+                user.password
+            );
+        } else {
+            // Support old plaintext accounts once,
+            // then immediately convert them to a hash.
+            validPassword = user.password === password;
+
+            if (validPassword) {
+                const passwordHash = await hashPassword(password);
+
+                await pool.query(
+                    "UPDATE users SET password = $1 WHERE id = $2",
+                    [passwordHash, user.id]
+                );
+            }
+        }
 
         if (!validPassword) {
             return res.json({
@@ -225,12 +199,11 @@ app.post("/login/v1", async function (req, res) {
 
         return res.json({
             success: true,
-            username: user.username,
             redirect: "https://pieblox.github.io/games"
         });
 
     } catch (err) {
-        console.error("Login error:", err);
+        console.error(err);
 
         return res.status(500).json({
             success: false,
@@ -239,16 +212,26 @@ app.post("/login/v1", async function (req, res) {
     }
 });
 
-// =========================
-// SESSION CHECK
-// =========================
-
-app.get("/session", async function (req, res) {
+// Session check
+app.get("/session", async (req, res) => {
     try {
         const token = getSessionToken(req);
-        const user = await getUserFromSession(token);
 
-        if (!user) {
+        if (!token) {
+            return res.json({
+                success: false,
+                loggedIn: false
+            });
+        }
+
+        const tokenHash = hashSessionToken(token);
+
+        const result = await pool.query(
+            "SELECT users.id, users.username FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token_hash = $1 AND sessions.expires_at > NOW()",
+            [tokenHash]
+        );
+
+        if (result.rows.length === 0) {
             return res.json({
                 success: false,
                 loggedIn: false
@@ -258,14 +241,11 @@ app.get("/session", async function (req, res) {
         return res.json({
             success: true,
             loggedIn: true,
-            user: {
-                id: user.id,
-                username: user.username
-            }
+            user: result.rows[0]
         });
 
     } catch (err) {
-        console.error("Session error:", err);
+        console.error(err);
 
         return res.status(500).json({
             success: false,
@@ -274,11 +254,8 @@ app.get("/session", async function (req, res) {
     }
 });
 
-// =========================
-// LOGOUT
-// =========================
-
-app.post("/logout", async function (req, res) {
+// Logout
+app.post("/logout", async (req, res) => {
     try {
         const token = getSessionToken(req);
 
@@ -304,7 +281,7 @@ app.post("/logout", async function (req, res) {
         });
 
     } catch (err) {
-        console.error("Logout error:", err);
+        console.error(err);
 
         return res.status(500).json({
             success: false,
@@ -313,42 +290,32 @@ app.post("/logout", async function (req, res) {
     }
 });
 
-// =========================
-// DATABASE TEST
-// =========================
-
-app.get("/dbtest", async function (req, res) {
+// dbtest
+app.get("/dbtest", async (req, res) => {
     try {
         const result = await pool.query("SELECT NOW()");
 
-        return res.json({
+        res.json({
             success: true,
             time: result.rows[0]
         });
 
     } catch (err) {
-        console.error("Database error:", err);
+        console.error(err);
 
-        return res.status(500).json({
+        res.status(500).json({
             success: false,
-            message: "Database error"
+            error: err.message
         });
     }
 });
 
-// =========================
-// SIGNUP
-// =========================
+// Signup
+app.post("/signup/v1", async (req, res) => {
+    const { username, password } = req.body || {};
 
-app.post("/signup/v1", async function (req, res) {
-    const username = req.body && req.body.username;
-    const password = req.body && req.body.password;
-
-    // NEVER log the password.
-    console.log(
-        "Signup request:",
-        username || "(missing username)"
-    );
+    // Do NOT log the password.
+    console.log("Signup:", username);
 
     try {
         if (!username || !password) {
@@ -358,22 +325,8 @@ app.post("/signup/v1", async function (req, res) {
             });
         }
 
-        if (username.length < 3 || username.length > 20) {
-            return res.json({
-                success: false,
-                message: "Invalid username"
-            });
-        }
-
-        if (password.length < 8) {
-            return res.json({
-                success: false,
-                message: "Password must be at least 8 characters"
-            });
-        }
-
         const existingUser = await pool.query(
-            "SELECT id FROM users WHERE username = $1",
+            "SELECT * FROM users WHERE username = $1",
             [username]
         );
 
@@ -393,6 +346,7 @@ app.post("/signup/v1", async function (req, res) {
 
         const user = result.rows[0];
 
+        // Automatically log the new user in.
         const sessionToken = await createSession(user.id);
 
         res.cookie("session", sessionToken, {
@@ -403,7 +357,7 @@ app.post("/signup/v1", async function (req, res) {
             path: "/"
         });
 
-        return res.json({
+        res.json({
             success: true,
             userId: user.id,
             username: user.username,
@@ -411,57 +365,45 @@ app.post("/signup/v1", async function (req, res) {
         });
 
     } catch (err) {
-        console.error("Signup error:", err);
+        console.error(err);
 
-        return res.status(500).json({
+        res.status(500).json({
             success: false,
             message: "Server error"
         });
     }
 });
 
-// =========================
-// CAPTCHA
-// =========================
-
-app.post("/captcha/validate/signup", function (req, res) {
+// Captcha
+app.post("/captcha/validate/signup", (req, res) => {
     res.json({
         success: true,
         message: "Captcha passed"
     });
 });
 
-app.post("/captcha/validate/login", function (req, res) {
+app.post("/captcha/validate/login", (req, res) => {
     res.json({
         success: true,
         message: "Captcha passed"
     });
 });
 
-// =========================
-// USERNAME CHECKER
-// =========================
+// Username checker
+app.get("/UserCheck/checkifinvalidusernameforsignup", (req, res) => {
+    const username = req.query.username;
 
-app.get(
-    "/UserCheck/checkifinvalidusernameforsignup",
-    function (req, res) {
-        const username = req.query.username;
+    res.json({
+        success: true,
+        isValid: true,
+        IsValid: true,
+        username: username || "",
+        message: "Username is available"
+    });
+});
 
-        res.json({
-            success: true,
-            isValid: true,
-            IsValid: true,
-            username: username || "",
-            message: "Username is available"
-        });
-    }
-);
-
-// =========================
-// DEBUG ROUTES
-// =========================
-
-app.get("/routes", function (req, res) {
+// Debug routes
+app.get("/routes", (req, res) => {
     res.json({
         routes: [
             "GET /",
@@ -478,11 +420,8 @@ app.get("/routes", function (req, res) {
     });
 });
 
-// =========================
-// API HOMEPAGE
-// =========================
-
-app.get("/", function (req, res) {
+// API homepage
+app.get("/", (req, res) => {
     res.json({
         success: true,
         message: "Pieblox API is running",
@@ -491,22 +430,16 @@ app.get("/", function (req, res) {
     });
 });
 
-// =========================
-// DEVICE INITIALIZE
-// =========================
-
-app.post("/device/initialize", function (req, res) {
+// Device initialize
+app.post("/device/initialize", (req, res) => {
     res.json({
         success: true,
         message: "Device initialized"
     });
 });
 
-// =========================
-// 404
-// =========================
-
-app.use(function (req, res) {
+// 404 (MUST STAY LAST)
+app.use((req, res) => {
     console.log("404:", req.method, req.url);
 
     res.status(404).json({
@@ -517,13 +450,8 @@ app.use(function (req, res) {
     });
 });
 
-// =========================
-// START SERVER
-// =========================
-
 const port = process.env.PORT || 3000;
 
-app.listen(port, "0.0.0.0", function () {
+app.listen(port, "0.0.0.0", () => {
     console.log("Server running on port " + port);
 });
-```
