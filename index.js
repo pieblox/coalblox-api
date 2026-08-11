@@ -34,7 +34,7 @@ function hashPassword(password) {
                 return;
             }
 
-            resolve(`${salt}:${derivedKey.toString("hex")}`);
+            resolve(salt + ":" + derivedKey.toString("hex"));
         });
     });
 }
