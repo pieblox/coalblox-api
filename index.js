@@ -25,31 +25,41 @@ app.use(express.urlencoded({ extended: true }));
 // =========================
 
 function hashPassword(password) {
-    return new Promise((resolve, reject) => {
+    return new Promise(function (resolve, reject) {
         const salt = crypto.randomBytes(16).toString("hex");
 
-        crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+        crypto.scrypt(password, salt, 64, function (err, derivedKey) {
             if (err) {
                 reject(err);
                 return;
             }
 
-            resolve(salt + ":" + derivedKey.toString("hex"));
+            resolve(
+                salt + ":" + derivedKey.toString("hex")
+            );
         });
     });
 }
 
 function verifyPassword(password, storedHash) {
-    return new Promise((resolve, reject) => {
+    return new Promise(function (resolve, reject) {
         if (!storedHash || !storedHash.includes(":")) {
             resolve(false);
             return;
         }
 
-        const [salt, key] = storedHash.split(":");
+        const parts = storedHash.split(":");
+        const salt = parts[0];
+        const key = parts[1];
+
+        if (!salt || !key) {
+            resolve(false);
+            return;
+        }
+
         const storedKey = Buffer.from(key, "hex");
 
-        crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+        crypto.scrypt(password, salt, 64, function (err, derivedKey) {
             if (err) {
                 reject(err);
                 return;
@@ -61,7 +71,10 @@ function verifyPassword(password, storedHash) {
             }
 
             resolve(
-                crypto.timingSafeEqual(storedKey, derivedKey)
+                crypto.timingSafeEqual(
+                    storedKey,
+                    derivedKey
+                )
             );
         });
     });
@@ -89,18 +102,19 @@ function getSessionToken(req) {
         return null;
     }
 
-    const cookie = cookieHeader
-        .split(";")
-        .map(x => x.trim())
-        .find(x => x.startsWith("session="));
+    const cookies = cookieHeader.split(";");
 
-    if (!cookie) {
-        return null;
+    for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i].trim();
+
+        if (cookie.startsWith("session=")) {
+            return decodeURIComponent(
+                cookie.substring("session=".length)
+            );
+        }
     }
 
-    return decodeURIComponent(
-        cookie.substring("session=".length)
-    );
+    return null;
 }
 
 async function createSession(userId) {
@@ -112,9 +126,7 @@ async function createSession(userId) {
     );
 
     await pool.query(
-        `INSERT INTO sessions
-        (user_id, token_hash, expires_at)
-        VALUES ($1, $2, $3)`,
+        "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
         [userId, tokenHash, expiresAt]
     );
 
@@ -138,11 +150,7 @@ async function getUserFromSession(token) {
     const tokenHash = hashSessionToken(token);
 
     const result = await pool.query(
-        `SELECT users.id, users.username
-         FROM sessions
-         JOIN users ON users.id = sessions.user_id
-         WHERE sessions.token_hash = $1
-         AND sessions.expires_at > NOW()`,
+        "SELECT users.id, users.username FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token_hash = $1 AND sessions.expires_at > NOW()",
         [tokenHash]
     );
 
@@ -153,7 +161,7 @@ async function getUserFromSession(token) {
 // LOGIN PAGE TEST
 // =========================
 
-app.get("/login/v1", (req, res) => {
+app.get("/login/v1", function (req, res) {
     res.json({
         success: true,
         message: "Login endpoint exists. Use POST."
@@ -164,11 +172,15 @@ app.get("/login/v1", (req, res) => {
 // LOGIN
 // =========================
 
-app.post("/login/v1", async (req, res) => {
-    const { username, password } = req.body || {};
+app.post("/login/v1", async function (req, res) {
+    const username = req.body && req.body.username;
+    const password = req.body && req.body.password;
 
     // NEVER log the password.
-    console.log("Login attempt:", username || "(missing username)");
+    console.log(
+        "Login attempt:",
+        username || "(missing username)"
+    );
 
     try {
         if (!username || !password) {
@@ -231,7 +243,7 @@ app.post("/login/v1", async (req, res) => {
 // SESSION CHECK
 // =========================
 
-app.get("/session", async (req, res) => {
+app.get("/session", async function (req, res) {
     try {
         const token = getSessionToken(req);
         const user = await getUserFromSession(token);
@@ -243,7 +255,7 @@ app.get("/session", async (req, res) => {
             });
         }
 
-        res.json({
+        return res.json({
             success: true,
             loggedIn: true,
             user: {
@@ -255,7 +267,7 @@ app.get("/session", async (req, res) => {
     } catch (err) {
         console.error("Session error:", err);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Server error"
         });
@@ -266,7 +278,7 @@ app.get("/session", async (req, res) => {
 // LOGOUT
 // =========================
 
-app.post("/logout", async (req, res) => {
+app.post("/logout", async function (req, res) {
     try {
         const token = getSessionToken(req);
 
@@ -286,7 +298,7 @@ app.post("/logout", async (req, res) => {
             path: "/"
         });
 
-        res.json({
+        return res.json({
             success: true,
             message: "Logged out"
         });
@@ -294,7 +306,7 @@ app.post("/logout", async (req, res) => {
     } catch (err) {
         console.error("Logout error:", err);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Server error"
         });
@@ -305,11 +317,11 @@ app.post("/logout", async (req, res) => {
 // DATABASE TEST
 // =========================
 
-app.get("/dbtest", async (req, res) => {
+app.get("/dbtest", async function (req, res) {
     try {
         const result = await pool.query("SELECT NOW()");
 
-        res.json({
+        return res.json({
             success: true,
             time: result.rows[0]
         });
@@ -317,7 +329,7 @@ app.get("/dbtest", async (req, res) => {
     } catch (err) {
         console.error("Database error:", err);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Database error"
         });
@@ -328,8 +340,9 @@ app.get("/dbtest", async (req, res) => {
 // SIGNUP
 // =========================
 
-app.post("/signup/v1", async (req, res) => {
-    const { username, password } = req.body || {};
+app.post("/signup/v1", async function (req, res) {
+    const username = req.body && req.body.username;
+    const password = req.body && req.body.password;
 
     // NEVER log the password.
     console.log(
@@ -374,15 +387,12 @@ app.post("/signup/v1", async (req, res) => {
         const passwordHash = await hashPassword(password);
 
         const result = await pool.query(
-            `INSERT INTO users (username, password)
-             VALUES ($1, $2)
-             RETURNING id, username`,
+            "INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username",
             [username, passwordHash]
         );
 
         const user = result.rows[0];
 
-        // Automatically create a login session.
         const sessionToken = await createSession(user.id);
 
         res.cookie("session", sessionToken, {
@@ -393,7 +403,7 @@ app.post("/signup/v1", async (req, res) => {
             path: "/"
         });
 
-        res.json({
+        return res.json({
             success: true,
             userId: user.id,
             username: user.username,
@@ -403,7 +413,7 @@ app.post("/signup/v1", async (req, res) => {
     } catch (err) {
         console.error("Signup error:", err);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Server error"
         });
@@ -414,14 +424,14 @@ app.post("/signup/v1", async (req, res) => {
 // CAPTCHA
 // =========================
 
-app.post("/captcha/validate/signup", (req, res) => {
+app.post("/captcha/validate/signup", function (req, res) {
     res.json({
         success: true,
         message: "Captcha passed"
     });
 });
 
-app.post("/captcha/validate/login", (req, res) => {
+app.post("/captcha/validate/login", function (req, res) {
     res.json({
         success: true,
         message: "Captcha passed"
@@ -434,7 +444,7 @@ app.post("/captcha/validate/login", (req, res) => {
 
 app.get(
     "/UserCheck/checkifinvalidusernameforsignup",
-    (req, res) => {
+    function (req, res) {
         const username = req.query.username;
 
         res.json({
@@ -451,7 +461,7 @@ app.get(
 // DEBUG ROUTES
 // =========================
 
-app.get("/routes", (req, res) => {
+app.get("/routes", function (req, res) {
     res.json({
         routes: [
             "GET /",
@@ -472,7 +482,7 @@ app.get("/routes", (req, res) => {
 // API HOMEPAGE
 // =========================
 
-app.get("/", (req, res) => {
+app.get("/", function (req, res) {
     res.json({
         success: true,
         message: "Pieblox API is running",
@@ -485,7 +495,7 @@ app.get("/", (req, res) => {
 // DEVICE INITIALIZE
 // =========================
 
-app.post("/device/initialize", (req, res) => {
+app.post("/device/initialize", function (req, res) {
     res.json({
         success: true,
         message: "Device initialized"
@@ -496,7 +506,7 @@ app.post("/device/initialize", (req, res) => {
 // 404
 // =========================
 
-app.use((req, res) => {
+app.use(function (req, res) {
     console.log("404:", req.method, req.url);
 
     res.status(404).json({
@@ -513,7 +523,7 @@ app.use((req, res) => {
 
 const port = process.env.PORT || 3000;
 
-app.listen(port, "0.0.0.0", () => {
-    console.log(`Server running on port ${port}`);
+app.listen(port, "0.0.0.0", function () {
+    console.log("Server running on port " + port);
 });
 ```
