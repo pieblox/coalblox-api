@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const app = express();
 
 const corsOptions = {
-    origin: "https://pieblox.github.io",
+    origin: "https://eggsplodesite.github.io",
     credentials: true
 };
 
